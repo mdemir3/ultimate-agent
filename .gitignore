@@ -1,0 +1,5 @@
+.ultimate/
+.env*
+__pycache__/
+*.egg-info/
+ultimate.config.json

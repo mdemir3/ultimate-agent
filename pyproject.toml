@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ultimate-coding-agent"
+version = "0.4.0"
+description = "A local coding agent with bounded automatic model routing"
+requires-python = ">=3.9"
+dependencies = []
+
+[project.scripts]
+ultimate = "ultimate.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["ultimate*"]
