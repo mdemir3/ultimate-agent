@@ -1,4 +1,9 @@
-"""Fit test: run a model setup through small coding tasks, scored by acceptance checks the model never sees."""
+"""Fit test: run a model setup through small coding tasks, scored by acceptance checks the model never sees.
+
+Each task builds a tiny project in a temporary folder and lets the agent work on it like a normal
+run. Then a hidden acceptance script runs; the task passes only if that script passes, whatever
+the agent reported.
+"""
 import os
 import subprocess
 import sys
@@ -11,6 +16,7 @@ from .policy import TIERS, route
 from .provider import BudgetExceeded
 from .safety import Workspace
 
+# Starting files for the tasks. {name}, {token} and {key} are filled in per task.
 CALCULATOR = 'def add(a, b):\n    return a + b\n\n\ndef multiply(a, b):\n    return a * b\n'
 CALCULATOR_TESTS = '''import unittest
 from calculator import add, multiply
@@ -125,6 +131,7 @@ def select_tasks(names=None):
     return chosen
 
 def write_project(root, files):
+    """Create the task's starting files under root."""
     for name, content in files.items():
         (root / name).parent.mkdir(parents=True, exist_ok=True)
         (root / name).write_text(content)
@@ -139,6 +146,7 @@ def accepted(root, script):
         return False
 
 def run_task(provider, task, max_steps=12, budget=None, emit=None):
+    """Run one task on a fresh copy of its project and return one result row."""
     with tempfile.TemporaryDirectory(prefix='ultimate-fit-') as tmp:
         root = Path(tmp) / 'project'
         write_project(root, task['project'])
@@ -148,13 +156,14 @@ def run_task(provider, task, max_steps=12, budget=None, emit=None):
             events.append(event)
             if emit:
                 emit({**event, 'task': task['name']})
-        decision = route(task['prompt'], len(task['files']))
+        decision = route(task['prompt'], len(task['files']))  # The same routing rules as a normal run.
+        # Measure spending and time for this task alone.
         spent, started = budget.spent if budget else 0.0, time.monotonic()
         try:
             result = Agent(provider, workspace, decision, max_steps, emit=record).run(task['prompt'], task['files'])
             status, tier, escalated = result['status'], result['tier'], result['escalated']
         except BudgetExceeded:
-            raise
+            raise  # A budget stop ends the whole fit test; the caller reports partial results.
         except Exception as exc:  # One failing model call should not end the whole fit test.
             status, tier, escalated = 'error: %s' % str(exc)[:160], decision.tier, False
         models = getattr(provider, 'models', None)
@@ -167,10 +176,12 @@ def run_task(provider, task, max_steps=12, budget=None, emit=None):
                 'cost_usd': round((budget.spent if budget else 0.0) - spent, 6)}
 
 def verdict(passed, runs):
+    """Turn a pass rate into a label: 80% or more is a good fit, 50% or more a partial fit."""
     rate = passed / runs
     return 'good fit' if rate >= 0.8 else 'partial fit' if rate >= 0.5 else 'not a fit yet'
 
 def summarize(results):
+    """Count passes per tier and suggest which tiers this setup can handle."""
     tiers = {}
     for level in TIERS:
         runs = [r for r in results if r['level'] == level]
@@ -190,9 +201,11 @@ def summarize(results):
             'cost_usd': round(sum(r['cost_usd'] for r in results), 6)}
 
 def format_report(results, summary, setup, runs_per_task=1):
+    """Format the results as the plain-text scorecard printed at the end."""
     rows = [('%s (%s)' % (r['title'], r['level']), r['final_tier'] + ('*' if r['escalated'] else ''), (r['model'] or '-')[:32],
              'PASS' if r['passed'] else 'FAIL', r['status'][:24], '%.0fs' % r['seconds']) for r in results]
     header = ('Task', 'Tier', 'Model', 'Result', 'Agent status', 'Time')
+    # Pad each column to its widest cell.
     widths = [max(len(row[i]) for row in rows + [header]) for i in range(len(header))]
     lines = ['Ultimate fit test — ' + setup, '']
     lines += ['  '.join(cell.ljust(width) for cell, width in zip(row, widths)).rstrip() for row in [header] + rows]

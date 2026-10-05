@@ -1,3 +1,4 @@
+"""Ollama adapter tests (model choice, payloads, reply parsing), the routing examples and command-line use."""
 import contextlib
 import io
 import json
@@ -18,10 +19,12 @@ from test_ultimate import FakeProvider, answer
 
 
 def chat_call(name, **args):
+    """An Ollama chat reply in which the model calls one tool."""
     return {'message': {'role': 'assistant', 'content': '', 'tool_calls': [{'function': {'name': name, 'arguments': args}}]},
             'done': True, 'done_reason': 'stop', 'prompt_eval_count': 10, 'eval_count': 5, 'total_duration': 2e9}
 
 def chat_text(text, done_reason='stop'):
+    """An Ollama chat reply with plain text."""
     return {'message': {'role': 'assistant', 'content': text}, 'done': True, 'done_reason': done_reason}
 
 class Server:
@@ -168,6 +171,7 @@ class LocalRoutingTests(unittest.TestCase):
                 Workspace(tmp, True).edit('a.py', 'x = 2\n', 'NEW')
 
 class StubOllama(FakeProvider):
+    """Fake OllamaProvider with fixed model names, for command-line tests."""
     host = 'http://127.0.0.1:11434'
     models = {'fast': 'small:latest', 'balanced': 'coder:7b', 'deep': 'coder:14b'}
 

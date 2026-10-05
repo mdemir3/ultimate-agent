@@ -1,4 +1,8 @@
-"""Helpers shared by the chat-format adapters (Ollama, OpenAI-compatible APIs, Python adapters)."""
+"""Helpers shared by the chat-format adapters (Ollama, OpenAI-compatible APIs, Python adapters).
+
+Internally the agent loop speaks one format (OpenAI Responses style). These helpers turn its
+history and tools into chat messages, and turn chat replies back into that format.
+"""
 import json
 import math
 
@@ -8,6 +12,7 @@ def text_tool_calls(content, names):
     """Some models write tool calls as JSON in prose or code fences instead of tool_calls.
     Extract calls to offered tools; a reply without one stays a text answer. This grants nothing
     the model could not request natively, and the agent validates every call."""
+    # Try to parse a JSON object at every "{"; keep those shaped like {"name": <offered tool>, "arguments": ...}.
     decoder, calls, i = json.JSONDecoder(), [], content.find('{')
     while i != -1:
         end = i + 1
@@ -43,15 +48,18 @@ def chat_messages(instructions, transcript, style='openai'):
                     {'id': call_id, 'type': 'function', 'function': {'name': name, 'arguments': json.dumps(arguments)}}]})
                 messages.append({'role': 'tool', 'tool_call_id': call_id, 'content': observation})
         else:
+            # The request, initial files and controller notes are grouped into user messages.
             pending.append(entry)
     if pending:
         messages.append({'role': 'user', 'content': json.dumps(pending, ensure_ascii=False)})
     return messages
 
 def chat_tools(tools):
+    """Convert the agent's tool list to the chat-completions tool format."""
     return [{'type': 'function', 'function': {k: t[k] for k in ('name', 'description', 'parameters')}} for t in tools]
 
 def text_output(text):
+    """Wrap plain text as a Responses-style message item."""
     return {'type': 'message', 'content': [{'type': 'output_text', 'text': text}]}
 
 def reply_output(tool_calls, content, tools):
@@ -69,6 +77,7 @@ def reply_output(tool_calls, content, tools):
     return output
 
 def setting(config, name, low, high, kinds=(int,), section='ollama'):
+    """Return config[name] if it is a number of an allowed type within [low, high]; otherwise raise a clear error."""
     value = config[name]
     if isinstance(value, bool) or not isinstance(value, kinds) or not math.isfinite(value) or not low <= value <= high:
         raise ValueError('Configure %s.%s between %s and %s.' % (section, name, low, high))

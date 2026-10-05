@@ -1,4 +1,8 @@
-"""Offline demonstration: scripted model responses, real file edits and checks."""
+"""Offline demonstration: scripted model responses, real file edits and checks.
+
+Run python3 demo.py. No API key or model is needed: DemoProvider plays the model from a fixed
+script, while the routing, tools, edit and check are the real ones.
+"""
 import argparse
 import json
 import sys
@@ -10,6 +14,7 @@ from ultimate.policy import needs_clarification, route
 from ultimate.safety import Workspace
 
 class DemoProvider:
+    """Plays the model: read the file, ask to escalate, fix the bug, run the check, then answer."""
     def __init__(self, workspace):
         self.workspace = workspace
         self.step = 0
@@ -31,6 +36,7 @@ class DemoProvider:
         return {'status': 'completed', 'output': [{'type': 'function_call', 'name': name, 'arguments': json.dumps(args)}]}
 
 class DemoRouter:
+    """Stands in for Jev with a fixed "balanced" assessment (used with --router jev)."""
     config = DEFAULT_JEV
 
     def assess(self, record):
@@ -43,12 +49,14 @@ def main():
     args = parser.parse_args()
     print('ULTIMATE MODE — offline demo')
     print('No API calls. Coding responses and Jev assessments are scripted; edits and checks are real.\n')
+    # Part 1: show how example prompts are routed.
     for prompt in ('Fix this spelling mistake', 'Add search to this page', 'Find why login occasionally fails', 'Fix it'):
         if needs_clarification(prompt):
             print('%s → ASK (no target named; add details or --file)' % prompt)
             continue
         d = route(prompt)
         print('%s → %s (%s)' % (prompt, d.tier.upper(), d.reasons[0]))
+    # Part 2: run the agent on a temporary project with a real bug and a real check.
     print('\nDemonstrating read → switch → edit → verify in a temporary project:')
     with tempfile.TemporaryDirectory(prefix='ultimate-demo-') as tmp:
         (Path(tmp) / 'calculator.py').write_text('def add(a, b):\n    return a - b\n')

@@ -1,3 +1,13 @@
+"""Command line: python3 -m ultimate {init, route, run, fit}.
+
+    init   write a starter ultimate.config.json
+    route  show which tier (and model) a prompt would get, without running the agent
+    run    run the agent on a project folder
+    fit    score a model setup on the built-in fit tasks (see fit.py)
+
+main() reads the options and config, applies the routing rules, builds the providers and the
+guarded workspace, runs the agent and prints the result as JSON.
+"""
 import argparse
 import json
 import os
@@ -14,17 +24,21 @@ from .policy import TIERS, route, judge_upgrade, needs_clarification
 from .provider import Budget, BudgetExceeded, OpenAIProvider, response_text
 from .safety import Workspace, ensure_no_secrets
 
+# The starter config that init writes. Model IDs and prices start empty on purpose: you fill them in.
 DEFAULT_CONFIG = {'provider': 'openai', 'models': {tier: {'id': '', 'input_usd_per_million': None,
                    'output_usd_per_million': None, 'input_token_limit': 64000,
                    'reasoning_effort': effort} for tier, effort in
                    [('fast', 'low'), ('balanced', 'medium'), ('deep', 'high')]},
                   'jev': dict(DEFAULT_JEV), 'ollama': DEFAULT_OLLAMA,
                   'compatible': DEFAULT_COMPATIBLE, 'custom': DEFAULT_CUSTOM}
+# Where model requests can go. A config can mix them per tier with "tier_providers".
 PROVIDERS = ('openai', 'ollama', 'compatible', 'custom')
+# What to do after init, per provider.
 NEXT_STEP = {'openai': 'Add coding model IDs and current token prices before a live agent run.',
              'ollama': 'Edit ollama.models to choose local models.',
              'compatible': 'Set compatible.base_url, api_key_env, models and prices for your API.',
              'custom': 'Set custom.adapter to "module:ClassName"; see examples/custom_adapter.py.'}
+# The reply to requests too vague to act on, such as "Fix it" with no --file.
 CLARIFY = ('The request does not say what to change. Describe the file, feature or error and how to tell it works, '
            'or pass --file with the relevant code. No model was called and no files were changed.')
 
@@ -59,6 +73,7 @@ def configured_model(name, config, tier):
     return model.get('id') if isinstance(model, dict) else model
 
 def make_provider(name, config, budget, emit, tiers=TIERS):
+    """Build the adapter for one provider, checking its settings for the tiers it serves."""
     if name == 'ollama':
         return OllamaProvider(config.get('ollama', {}), emit, tiers=tiers)
     if name == 'compatible':
@@ -83,6 +98,7 @@ def make_providers(names, config, budget, emit):
     return next(iter(built.values())) if len(built) == 1 else TieredProvider({tier: built[names[tier]] for tier in TIERS})
 
 def fit_command(args):
+    """python3 -m ultimate fit: run the fit tasks and print the scorecard."""
     if not 1 <= args.runs <= 10 or not 1 <= args.max_steps <= 30:
         raise ValueError('--runs must be between 1 and 10 and --max-steps between 1 and 30.')
     tasks = select_tasks([name.strip() for name in args.tasks.split(',') if name.strip()] if args.tasks else None)
@@ -95,6 +111,7 @@ def fit_command(args):
     if args.model and (mixed or names['fast'] not in ('ollama', 'compatible')):
         raise ValueError('--model puts one model on every tier, so it needs a single ollama or compatible provider; '
                          'add --provider ollama or --provider compatible.')
+    # --model is a shortcut that puts one model on every tier.
     if args.model:
         name, section = names['fast'], config.get(names['fast'], {})
         models = {tier: [args.model] if name == 'ollama' else args.model for tier in TIERS}
@@ -110,6 +127,7 @@ def fit_command(args):
     models = getattr(provider, 'models', {})
     setup = ('' if mixed else 'provider %s; ' % names['fast']) + ', '.join(
         '%s=%s%s' % (t, models.get(t, '?'), ' (%s)' % names[t] if mixed else '') for t in TIERS)
+    # Run each task --runs times. A budget stop or Ctrl-C ends early but still prints partial results.
     results, total, stopped = [], len(tasks) * args.runs, False
     try:
         for task in tasks:
@@ -131,6 +149,7 @@ def fit_command(args):
     return 2 if stopped else 0
 
 def main():
+    """Parse the command line, run the command and return the exit code: 0 for success, 2 otherwise."""
     parser = argparse.ArgumentParser(description='Ultimate mode: automatic model routing for coding tasks.')
     sub = parser.add_subparsers(dest='command', required=True)
     init = sub.add_parser('init', help='Create an editable provider configuration.')
@@ -170,6 +189,7 @@ def main():
     ws = None
     state = None
     try:
+        # init: write the starter config. Mode 'x' refuses to overwrite an existing file.
         if args.command == 'init':
             with open(args.config, 'x') as f:
                 json.dump({**DEFAULT_CONFIG, 'provider': args.provider}, f, indent=2)
@@ -177,12 +197,15 @@ def main():
             return 0
         if args.command == 'fit':
             return fit_command(args)
+        # Never send a prompt that contains a credential.
         ensure_no_secrets(args.prompt)
         backend = args.router or ('llm' if args.judge else 'rules')
+        # The rules-based tier comes first; anything later may raise it, never lower it.
         decision = route(args.prompt, len(args.file), lock=args.lock)
         config, names = load_config(args)
         if 'ollama' in names.values() and backend == 'jev':
             raise ValueError('Jev sends the task to TypeSafe. With Ollama, use the local rules router or --router llm.')
+        # Too vague to act on: ask before any model call or file access.
         if needs_clarification(args.prompt, len(args.file)):
             routing = {'backend': 'rules', 'status': 'vague_request'}
             result = ({**decision.to_dict(), 'status': 'needs_clarification', 'routing': routing} if args.command == 'route' else
@@ -190,6 +213,7 @@ def main():
                        'changed_files': [], 'verification': None})
             print(json.dumps({**result, 'answer': CLARIFY}, indent=2))
             return 2
+        # route with the rules router: show the decision without calling any model.
         if args.command == 'route' and (backend == 'rules' or args.lock):
             result = {**decision.to_dict(), 'routing': {'backend': backend,
                       'status': 'skipped_model_lock' if args.lock else 'offline'}}
@@ -205,7 +229,9 @@ def main():
         check = shlex.split(args.check) if getattr(args, 'check', None) else None
         if getattr(args, 'check', None) and not check:
             raise ValueError('Verification command cannot be empty.')
+        # From here on: a real run, or a route preview that asks Jev or the LLM judge.
         ws = Workspace(args.workspace, getattr(args, 'allow_write', False), check)
+        # Each run gets a private folder for its event log and the originals of edited files.
         state_root = Path(args.state_dir).resolve()
         state = state_root / str(uuid.uuid4())
         state.mkdir(parents=True, mode=0o700)
@@ -216,6 +242,7 @@ def main():
         if config is None and remote and (args.command == 'run' or backend == 'llm'):
             raise ValueError('Create %s with `python3 -m ultimate init --provider %s` first.' % (args.config, remote[0]))
         config = config or {}
+        # Log each event to the run's events.jsonl and show it on stderr.
         def emit(event):
             with open(state / 'events.jsonl', 'a') as f:
                 f.write(json.dumps(event) + '\n')
@@ -226,6 +253,7 @@ def main():
         openai_only = set(names.values()) == {'openai'}
         if provider and not openai_only:
             emit({'event': 'models', 'providers': names, 'models': provider.models})
+        # route with --router jev or llm: one classification request, no tools.
         if args.command == 'route':
             record = [{'original_request': args.prompt}] + [{'initial_file': ws.read(path)} for path in args.file]
             if jev:
@@ -240,6 +268,7 @@ def main():
                       'routing': metadata, 'estimated_cost_usd': round(budget.spent, 6)}
             print(json.dumps(with_models(result, names, provider.models) if provider and not openai_only else result, indent=2))
             return 2 if clarification else 0
+        # run: hand the task to the agent loop.
         result = Agent(provider, ws, decision, args.max_steps, bool(args.lock), emit).run(
             args.prompt, args.file, backend == 'llm', jev, args.router_fallback)
         if args.lock and backend != 'rules':
@@ -249,12 +278,14 @@ def main():
         result['estimated_cost_usd'] = round(budget.spent, 6)
         print(json.dumps(result, indent=2))
         return 0 if result['status'] in ('answered', 'checks_passed') else 2
+    # Expected problems (bad config, missing key, budget) end with a message, not a traceback.
     except (ValueError, OSError, KeyError, TypeError) as exc:
         print('Ultimate stopped: ' + str(exc), file=sys.stderr)
         if ws and ws.changed:
             print('Edits remain in the workspace; review them before continuing.', file=sys.stderr)
         return 2
     finally:
+        # Say where the originals of edited files were saved.
         if state and ws and ws.snapshots:
             print('Local recovery copies: ' + str(state), file=sys.stderr)
 

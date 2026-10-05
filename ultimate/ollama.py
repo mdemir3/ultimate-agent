@@ -1,4 +1,8 @@
-"""Local Ollama adapter. Requests go only to the configured host; there is no cost ledger."""
+"""Local models through Ollama. Requests go only to the configured host; there is no cost ledger.
+
+At start-up it asks Ollama which models are installed and, for each tier, picks the first
+listed model that supports tool calling.
+"""
 import json
 import socket
 import urllib.error
@@ -24,12 +28,15 @@ DEFAULT_OLLAMA = {
 }
 
 def tag(name):
+    """Ollama lists untagged models as name:latest, so add the tag before comparing names."""
     return name if ':' in name else name + ':latest'
 
 class OllamaProvider:
+    """Sends agent steps to a local Ollama server. self.models maps each tier to the model chosen for it."""
     def __init__(self, config, emit=None, opener=None, tiers=TIERS):
         if not isinstance(config, dict) or not isinstance(config.get('models', {}), dict):
             raise ValueError('Configure ollama as an object with a models object.')
+        # Your settings override the defaults; the per-tier model lists are merged separately.
         self.config = c = {**DEFAULT_OLLAMA, **config, 'models': {**DEFAULT_OLLAMA['models'], **config.get('models', {})}}
         host = urlparse(c['host']) if isinstance(c['host'], str) else None
         if not host or host.scheme not in ('http', 'https') or not host.netloc or host.path not in ('', '/'):
@@ -42,6 +49,7 @@ class OllamaProvider:
         self.emit = emit or (lambda event: None)
         # Bypass system proxies so local requests stay on this machine.
         self.opener = opener or urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        # Ask Ollama which models are installed, then take the first tool-capable candidate per tier.
         installed = {m.get('name') for m in self.request('/api/tags', None, 10).get('models', []) if isinstance(m, dict)}
         self.models, capable = {}, {}
         for tier in tiers:
@@ -62,6 +70,7 @@ class OllamaProvider:
                                  % (tier, ', '.join(candidates), candidates[0]))
 
     def request(self, path, payload, timeout):
+        """GET (payload None) or POST JSON to the Ollama API, turning network errors into clear messages."""
         data = None if payload is None else json.dumps(payload, ensure_ascii=False).encode()
         request = urllib.request.Request(self.host + path, data=data, headers={'Content-Type': 'application/json'})
         try:
@@ -82,11 +91,13 @@ class OllamaProvider:
         return result
 
     def call(self, tier, instructions, transcript, tools=None, schema=None):
+        """Send one agent step to the tier's local model and return Responses-style output."""
         c, model = self.config, self.models[tier]
         payload = {'model': model, 'stream': False, 'messages': chat_messages(instructions, transcript, 'ollama'),
                    'options': {'num_ctx': c['num_ctx'], 'num_predict': c['max_output_tokens'], 'temperature': c['temperature']}}
         if tools:
             payload['tools'] = chat_tools(tools)
+        # The LLM judge passes a JSON schema; Ollama's format option makes the model follow it.
         if schema:
             payload['format'] = schema
         # Ollama truncates prompts longer than num_ctx instead of failing, which could drop
@@ -97,6 +108,7 @@ class OllamaProvider:
         message = result.get('message')
         if not isinstance(message, dict):
             raise ValueError('Ollama returned an unexpected response.')
+        # Log which model answered, with token counts and time.
         duration = result.get('total_duration')
         self.emit({'event': 'model_call', 'provider': 'ollama', 'tier': tier, 'model': model,
                    'input_tokens': result.get('prompt_eval_count'), 'output_tokens': result.get('eval_count'),

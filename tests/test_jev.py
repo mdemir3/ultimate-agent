@@ -1,3 +1,4 @@
+"""Jev router tests: HTTP transport, strict response validation, routing policy, agent use and the CLI."""
 import contextlib
 import copy
 import io
@@ -20,6 +21,7 @@ from test_ultimate import FakeProvider, answer
 
 
 def response(choice='deep', confidence=.9, risk=.05, ambiguity=.05):
+    """A well-formed Jev answer; the arguments set the chosen tier and the three probabilities."""
     probabilities = {t: .025 for t in ('fast', 'balanced', 'deep')}
     probabilities[choice] = .95
     return {'model': 'jev-1.13.0', 'answers': {
@@ -29,6 +31,7 @@ def response(choice='deep', confidence=.9, risk=.05, ambiguity=.05):
         'usage': {'input_tokens': 100, 'output_tokens': 50}}
 
 class Opener:
+    """Fake HTTP client: returns one JSON result (or raises an error) and records each request."""
     def __init__(self, result=None, error=None):
         self.result, self.error = result, error
         self.calls = []
@@ -154,6 +157,7 @@ class JevPolicyTests(unittest.TestCase):
             with self.assertRaises(JevError): parse_assessment(payload)
 
 class StubRouter:
+    """Fake JevRouter that returns a fixed assessment and records what it was sent."""
     config = DEFAULT_JEV
     def __init__(self, payload=None, error=None):
         self.payload, self.error, self.calls = payload or response(), error, []

@@ -1,3 +1,7 @@
+"""Core tests: routing rules, workspace guardrails, the budget ledger and the agent loop.
+
+FakeProvider stands in for a model; call() and answer() build its scripted replies.
+"""
 import json
 import os
 from pathlib import Path
@@ -10,12 +14,15 @@ from ultimate.safety import Workspace, ensure_no_secrets
 
 
 def call(name, **args):
+    """A scripted reply in which the model calls one tool."""
     return {'status': 'completed', 'output': [{'type': 'function_call', 'name': name, 'arguments': json.dumps(args)}]}
 
 def answer(text='Done'):
+    """A scripted reply in which the model gives its final text answer."""
     return {'status': 'completed', 'output': [{'type': 'message', 'content': [{'type': 'output_text', 'text': text}]}]}
 
 class FakeProvider:
+    """Plays a model by replaying scripted replies in order; records the tier of each step."""
     def __init__(self, responses):
         self.responses, self.tiers = iter(responses), []
     def call(self, tier, *args, **kwargs):

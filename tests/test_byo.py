@@ -1,3 +1,4 @@
+"""Bring-your-own-model tests: compatible APIs, custom adapters, the fit test and per-tier providers."""
 import contextlib
 import io
 import json
@@ -20,6 +21,7 @@ from test_ultimate import FakeProvider, answer, call
 
 
 def completion(content=None, tool_calls=(), finish='stop', usage=(100, 20)):
+    """A chat-completions reply with text or tool calls, plus token usage."""
     message = {'role': 'assistant', 'content': content}
     if tool_calls:
         message['tool_calls'] = [{'id': 'c%d' % i, 'type': 'function', 'function': {'name': name, 'arguments': json.dumps(args)}}
@@ -130,6 +132,7 @@ class ScriptedAdapter:
         return self.replies.pop(0)
 
 class NoComplete:
+    """An adapter without complete(), to test the load error."""
     def __init__(self, options):
         pass
 
@@ -171,6 +174,7 @@ class Solver:
         return answer('Applied the fix.')
 
 class Idle:
+    """A scripted model that never edits anything, so every fit task should fail."""
     models = {tier: 'idle' for tier in TIERS}
     def call(self, *args, **kwargs):
         return answer('I looked at it.')
@@ -266,6 +270,7 @@ class CommandTests(unittest.TestCase):
         self.assertTrue({'models', 'ollama', 'compatible', 'custom'} <= set(written))
 
 class Stub(FakeProvider):
+    """A FakeProvider labeled with one model name for every tier."""
     def __init__(self, label, responses=()):
         super().__init__(responses)
         self.models = {tier: label for tier in TIERS}

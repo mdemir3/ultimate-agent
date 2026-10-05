@@ -1,3 +1,4 @@
+"""OpenAI adapter tests (payload, budget, errors) and end-to-end agent workflows on real files."""
 import io
 import json
 import tempfile
